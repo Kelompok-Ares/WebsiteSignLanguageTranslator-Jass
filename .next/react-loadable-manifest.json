@@ -16,11 +16,5 @@
     "files": [
       "static/chunks/_app-pages-browser_node_modules_mediapipe_hands_hands_js.js"
     ]
-  },
-  "lib\\model.ts -> @tensorflow/tfjs": {
-    "id": "lib\\model.ts -> @tensorflow/tfjs",
-    "files": [
-      "static/chunks/_app-pages-browser_node_modules_tensorflow_tfjs_dist_index_js.js"
-    ]
   }
 }
