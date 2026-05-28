@@ -1,1 +1,31 @@
-node_modules/
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js Build Output
+/.next/
+/out/
+
+# Production
+/build
+
+# Environment Variables
+# These should NOT be committed to GitHub
+.env*.local
+.env
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Vercel-specific files
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
