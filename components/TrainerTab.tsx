@@ -18,9 +18,10 @@ interface Props {
   onDatasetChange: (d: DatasetState) => void;
   model: SignModel;
   onModelTrained: () => void;
+  backendConnected: boolean;
 }
 
-export default function TrainerTab({ dataset, onDatasetChange, model, onModelTrained }: Props) {
+export default function TrainerTab({ dataset, onDatasetChange, model, onModelTrained, backendConnected }: Props) {
   const { frameCallbackRef, isHandDetected, landmarksRef } = useMediaPipe();
 
   const [newLabel, setNewLabel] = useState('');
@@ -29,7 +30,6 @@ export default function TrainerTab({ dataset, onDatasetChange, model, onModelTra
   const [recordCount, setRecordCount] = useState(0);
   const [isTraining, setIsTraining] = useState(false);
   const [trainLogs, setTrainLogs] = useState<TrainLog[]>([]);
-  const [epochs, setEpochs] = useState(50);
   const [toast, setToast] = useState('');
 
   const recordingRef = useRef(false);
@@ -85,6 +85,7 @@ export default function TrainerTab({ dataset, onDatasetChange, model, onModelTra
   };
 
   const handleTrain = async () => {
+    if (!backendConnected) { showToast('⚠️ Backend tidak terkoneksi! Cek Settings.'); return; }
     if (dataset.samples.length < 5) { showToast('Butuh minimal 5 sampel untuk melatih!'); return; }
     if (dataset.labels.length < 2) { showToast('Butuh minimal 2 label!'); return; }
     setIsTraining(true);
@@ -92,7 +93,7 @@ export default function TrainerTab({ dataset, onDatasetChange, model, onModelTra
     await model.build(dataset.labels);
     await model.train(
       dataset.samples,
-      epochs,
+      50, // max epochs — backend handles actual training
       (log) => setTrainLogs((l) => [...l, log]),
       () => { setIsTraining(false); onModelTrained(); showToast('✅ Model berhasil dilatih!'); }
     );
@@ -126,6 +127,15 @@ export default function TrainerTab({ dataset, onDatasetChange, model, onModelTra
       {toast && (
         <div className="glass" style={{ padding: '10px 14px', borderColor: 'rgba(0,212,255,0.3)', fontSize: 13, color: 'var(--accent-cyan)' }}>
           {toast}
+        </div>
+      )}
+
+      {/* Backend warning */}
+      {!backendConnected && (
+        <div style={{ padding: '12px 14px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
+          <p style={{ fontSize: 13, color: '#f87171' }}>
+            ⚠️ Backend belum terkoneksi. Training membutuhkan koneksi ke Google Colab. Buka tab <b>Settings</b> untuk mengatur.
+          </p>
         </div>
       )}
 
@@ -229,11 +239,14 @@ export default function TrainerTab({ dataset, onDatasetChange, model, onModelTra
       <div className="glass" style={{ padding: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <span className="section-title">Latih Model</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Epoch: <b style={{ color: 'var(--text-primary)' }}>{epochs}</b></span>
-            <input type="range" min={10} max={200} step={10} value={epochs}
-              onChange={(e) => setEpochs(+e.target.value)}
-              className="slider" style={{ width: 100, '--pct': `${(epochs / 200) * 100}%` } as React.CSSProperties} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{
+              width: 7, height: 7, borderRadius: '50%',
+              background: backendConnected ? '#10b981' : '#ef4444',
+            }} />
+            <span style={{ fontSize: 11, color: backendConnected ? '#10b981' : '#ef4444' }}>
+              {backendConnected ? 'Server Ready' : 'Server Offline'}
+            </span>
           </div>
         </div>
 
@@ -247,16 +260,16 @@ export default function TrainerTab({ dataset, onDatasetChange, model, onModelTra
             <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Total Label</div>
           </div>
           <div className="glass" style={{ flex: 1, padding: '10px 14px', textAlign: 'center' }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--accent-amber)' }}>{epochs}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--accent-amber)' }}>{trainLogs.length || '—'}</div>
             <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Epoch</div>
           </div>
         </div>
 
         <button
           className="btn btn-primary" style={{ width: '100%', padding: '12px', fontSize: 14, fontWeight: 600 }}
-          onClick={handleTrain} disabled={isTraining || dataset.samples.length < 5}
+          onClick={handleTrain} disabled={isTraining || dataset.samples.length < 5 || !backendConnected}
         >
-          {isTraining ? `⏳ Melatih... (Epoch ${trainLogs.length}/${epochs})` : '🚀 Latih Model'}
+          {isTraining ? `⏳ Melatih di Server...` : '🚀 Latih Model'}
         </button>
 
         {/* Training progress */}
@@ -266,10 +279,13 @@ export default function TrainerTab({ dataset, onDatasetChange, model, onModelTra
               <div style={{
                 height: '100%', borderRadius: 2,
                 background: 'linear-gradient(90deg, var(--accent-cyan), var(--accent-purple))',
-                width: `${(trainLogs.length / epochs) * 100}%`,
-                transition: 'width 0.3s ease',
+                width: '100%',
+                animation: 'pulse-width 1.5s ease-in-out infinite',
               }} />
             </div>
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6, textAlign: 'center' }}>
+              Menunggu respons dari Google Colab...
+            </p>
           </div>
         )}
 

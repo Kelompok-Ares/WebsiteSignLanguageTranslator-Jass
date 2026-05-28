@@ -55,7 +55,7 @@ export function importDatasetJSON(json: string): DatasetState | null {
           Array.isArray((s as Sample).features) &&
           (s as Sample).features.length === 63
       );
-      const labels: string[] = parsed.labels ?? [...new Set(samples.map((s) => s.label))].sort();
+      const labels: string[] = parsed.labels ?? Array.from(new Set(samples.map((s) => s.label))).sort();
       return { samples, labels };
     }
     return null;

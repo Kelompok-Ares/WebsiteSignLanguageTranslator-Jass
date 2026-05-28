@@ -6,11 +6,11 @@ import { PredictionSmoother } from '@/lib/utils';
 import type { SignModel } from '@/lib/model';
 import type { PredictionResult } from '@/lib/model';
 
-interface Props { model: SignModel; modelTrained: boolean; }
+interface Props { model: SignModel; modelTrained: boolean; backendConnected: boolean; }
 
 const smoother = new PredictionSmoother(12, 0.55);
 
-export default function DetectionTab({ model, modelTrained }: Props) {
+export default function DetectionTab({ model, modelTrained, backendConnected }: Props) {
   const { frameCallbackRef, isHandDetected } = useMediaPipe();
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
   const [history, setHistory] = useState<string[]>([]);
@@ -18,7 +18,7 @@ export default function DetectionTab({ model, modelTrained }: Props) {
   predRef.current = prediction;
 
   useEffect(() => {
-    if (!modelTrained) { frameCallbackRef.current = null; return; }
+    if (!modelTrained || !backendConnected) { frameCallbackRef.current = null; return; }
 
     frameCallbackRef.current = async (lm) => {
       if (!lm) {
@@ -34,7 +34,7 @@ export default function DetectionTab({ model, modelTrained }: Props) {
     };
 
     return () => { frameCallbackRef.current = null; };
-  }, [modelTrained, model, frameCallbackRef]);
+  }, [modelTrained, backendConnected, model, frameCallbackRef]);
 
   // Add confirmed prediction to sentence history
   useEffect(() => {
@@ -49,7 +49,16 @@ export default function DetectionTab({ model, modelTrained }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }} className="fade-in">
-      {!modelTrained && (
+      {/* Backend disconnected warning */}
+      {!backendConnected && (
+        <div style={{ padding: '12px 14px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
+          <p style={{ fontSize: 13, color: '#f87171' }}>
+            ⚠️ Backend tidak terkoneksi. Buka tab <b>Settings</b> untuk mengatur URL backend.
+          </p>
+        </div>
+      )}
+
+      {!modelTrained && backendConnected && (
         <div style={{ padding: '12px 14px', borderRadius: 6, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
           <p style={{ fontSize: 13, color: 'var(--accent-amber)' }}>
             Model belum dilatih. Buka tab <b>Pelatih</b> untuk merekam sampel.
@@ -88,6 +97,12 @@ export default function DetectionTab({ model, modelTrained }: Props) {
           <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Model Status</div>
           <div style={{ fontSize: 13, fontWeight: 500, color: modelTrained ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
             {modelTrained ? 'Aktif' : 'Tidak Aktif'}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Backend</div>
+          <div style={{ fontSize: 13, fontWeight: 500, color: backendConnected ? 'var(--accent-green)' : '#ef4444' }}>
+            {backendConnected ? 'Connected' : 'Disconnected'}
           </div>
         </div>
       </div>
