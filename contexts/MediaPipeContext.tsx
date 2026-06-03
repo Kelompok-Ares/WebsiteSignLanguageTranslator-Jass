@@ -7,7 +7,6 @@ import { drawHandSkeleton } from '@/lib/utils';
 
 export interface MediaPipeCtx {
   videoRef: MutableRefObject<HTMLVideoElement | null>;
-  canvasRef: MutableRefObject<HTMLCanvasElement | null>;
   landmarksRef: MutableRefObject<Landmark[] | null>;
   /** Register a per-frame callback — only one at a time */
   frameCallbackRef: MutableRefObject<((lm: Landmark[] | null) => void) | null>;
@@ -17,8 +16,6 @@ export interface MediaPipeCtx {
   cameras: MediaDeviceInfo[];
   selectedCameraId: string;
   setSelectedCameraId: (id: string) => void;
-  drawOverlay: boolean;
-  setDrawOverlay: (v: boolean) => void;
   minDetectionConfidence: number;
   setMinDetectionConfidence: (v: number) => void;
 }
@@ -27,7 +24,6 @@ const Ctx = createContext<MediaPipeCtx | null>(null);
 
 export function MediaPipeProvider({ children }: { children: React.ReactNode }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const landmarksRef = useRef<Landmark[] | null>(null);
   const frameCallbackRef = useRef<((lm: Landmark[] | null) => void) | null>(null);
   const detectedRef = useRef(false);
@@ -37,7 +33,6 @@ export function MediaPipeProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
-  const [drawOverlay, setDrawOverlay] = useState(true);
   const [minDetectionConfidence, setMinDetectionConfidence] = useState(0.7);
 
   // Request camera permission and enumerate devices
@@ -96,7 +91,7 @@ export function MediaPipeProvider({ children }: { children: React.ReactNode }) {
         });
         hands.setOptions({
           maxNumHands: 1,
-          modelComplexity: 1,
+          modelComplexity: 0, // 0 for better performance (reduces lag)
           minDetectionConfidence,
           minTrackingConfidence: 0.5,
         });
@@ -109,15 +104,9 @@ export function MediaPipeProvider({ children }: { children: React.ReactNode }) {
             detectedRef.current = detected;
             setIsHandDetected(detected);
           }
-          // Draw overlay
-          const canvas = canvasRef.current;
-          if (canvas) {
-            const ctx2d = canvas.getContext('2d');
-            if (ctx2d) {
-              ctx2d.clearRect(0, 0, canvas.width, canvas.height);
-              if (lm && drawOverlay) drawHandSkeleton(ctx2d, lm, canvas.width, canvas.height);
-            }
-          }
+          
+          // Completely removed the heavy 2D canvas drawing (massive performance boost)
+          
           frameCallbackRef.current?.(lm);
         });
 
@@ -125,8 +114,8 @@ export function MediaPipeProvider({ children }: { children: React.ReactNode }) {
           onFrame: async () => {
             if (videoRef.current && hands) await hands.send({ image: videoRef.current });
           },
-          width: 640,
-          height: 480,
+          width: 320, // Downscaled to 320x240 for extreme MediaPipe speed (reduces delay)
+          height: 240,
           ...(selectedCameraId ? { deviceId: selectedCameraId } : {}),
         });
         await cam.start();
@@ -150,10 +139,9 @@ export function MediaPipeProvider({ children }: { children: React.ReactNode }) {
   return (
     <Ctx.Provider
       value={{
-        videoRef, canvasRef, landmarksRef, frameCallbackRef,
+        videoRef, landmarksRef, frameCallbackRef,
         isHandDetected, isLoading, error,
         cameras, selectedCameraId, setSelectedCameraId,
-        drawOverlay, setDrawOverlay,
         minDetectionConfidence, setMinDetectionConfidence,
       }}
     >

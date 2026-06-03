@@ -149,7 +149,7 @@ export class SignModel {
     }
   }
 
-  async predict(features: number[]): Promise<PredictionResult | null> {
+  async predict(features: number[][] | number[]): Promise<PredictionResult | null> {
     if (!this._isBuilt || !this._backendUrl) return null;
 
     try {

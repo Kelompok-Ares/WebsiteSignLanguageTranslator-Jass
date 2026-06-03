@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import { MediaPipeProvider } from '@/contexts/MediaPipeContext';
 import {
   createEmptyDataset, saveToStorage, loadFromStorage,
@@ -11,6 +12,21 @@ import DetectionTab from './DetectionTab';
 import TrainerTab from './TrainerTab';
 import SettingsTab from './SettingsTab';
 
+// Lazy-load Hand3DViewer since it imports Three.js
+const Hand3DViewer = dynamic(() => import('./Hand3DViewer'), {
+  ssr: false,
+  loading: () => (
+    <div style={{
+      width: '100%', height: '100%',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      flexDirection: 'column', gap: 12,
+    }}>
+      <div className="spinner" />
+      <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Loading 3D engine...</span>
+    </div>
+  ),
+});
+
 type Tab = 'detection' | 'trainer' | 'settings';
 
 export default function Dashboard() {
@@ -20,18 +36,17 @@ export default function Dashboard() {
   const [modelTrained, setModelTrained] = useState(false);
   const [backendConnected, setBackendConnected] = useState(false);
   const [backendUrl, setBackendUrl] = useState('');
+  const [panelOpen, setPanelOpen] = useState(true);
 
   useEffect(() => {
     const saved = loadFromStorage();
     if (saved) setDataset(saved);
   }, []);
 
-  // Set initial URL from model (localStorage)
   useEffect(() => {
     setBackendUrl(model.backendUrl);
   }, [model]);
 
-  // Health check on mount and when URL changes
   useEffect(() => {
     if (!backendUrl) {
       setBackendConnected(false);
@@ -49,8 +64,6 @@ export default function Dashboard() {
     };
 
     checkHealth();
-
-    // Periodic health check every 30 seconds
     const interval = setInterval(checkHealth, 30000);
     return () => { active = false; clearInterval(interval); };
   }, [backendUrl, model]);
@@ -66,96 +79,86 @@ export default function Dashboard() {
   }, [model]);
 
   const tabs: { id: Tab; label: string; icon: string }[] = [
-    { id: 'detection', label: 'Detection', icon: '👁' },
-    { id: 'trainer', label: 'Data', icon: '🧠' },
+    { id: 'detection', label: 'Detect', icon: '👁' },
+    { id: 'trainer', label: 'Train', icon: '🧠' },
     { id: 'settings', label: 'Settings', icon: '⚙️' },
   ];
 
   return (
     <MediaPipeProvider>
-      <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden', background: '#000' }}>
+      <div className="app-shell">
 
-        {/* Fullscreen Webcam Background */}
+        {/* ─── Headless camera (hidden) ─── */}
         <WebcamPanel />
 
-        {/* Floating Sidebar Container */}
-        <div style={{
-          position: 'absolute',
-          top: 16,
-          right: 16,
-          bottom: 16,
-          width: 380,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-          zIndex: 50
-        }}>
-
-          {/* Header/Nav Glass Panel */}
-          <div className="glass" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 24 }}>🤟</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>Sign Language Translator (Prototype)</div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>By Ares Team</div>
-              </div>
-              {/* Backend status indicator */}
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '4px 10px', borderRadius: 20,
-                background: backendConnected ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                border: `1px solid ${backendConnected ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`,
-              }}>
-                <div style={{
-                  width: 7, height: 7, borderRadius: '50%',
-                  background: backendConnected ? '#10b981' : '#ef4444',
-                  boxShadow: backendConnected ? '0 0 6px #10b981' : '0 0 6px #ef4444',
-                }} />
-                <span style={{ fontSize: 10, fontWeight: 600, color: backendConnected ? '#10b981' : '#ef4444' }}>
-                  {backendConnected ? 'API' : 'Offline'}
-                </span>
-              </div>
+        {/* ─── Top Header ─── */}
+        <header className="app-header">
+          <div className="app-logo">
+            <div className="app-logo-icon">🤟</div>
+            <div>
+              <div className="app-logo-text">SignLang Translator</div>
+              <div className="app-logo-sub">by Ares Team</div>
             </div>
-
-            <nav style={{ display: 'flex', gap: 6 }}>
-              {tabs.map((t) => (
-                <button key={t.id} onClick={() => setActiveTab(t.id)}
-                  className={`tab-btn ${activeTab === t.id ? 'tab-btn-active' : ''}`}>
-                  <span>{t.icon}</span> <span>{t.label}</span>
-                </button>
-              ))}
-            </nav>
           </div>
-
-          {/* Active Tab Content Panel */}
-          <div className="glass" style={{ flex: 1, overflowY: 'auto', padding: '20px 16px', display: 'flex', flexDirection: 'column' }}>
-            {activeTab === 'detection' && (
-              <DetectionTab model={model} modelTrained={modelTrained} backendConnected={backendConnected} />
-            )}
-            {activeTab === 'trainer' && (
-              <TrainerTab
-                dataset={dataset}
-                onDatasetChange={updateDataset}
-                model={model}
-                onModelTrained={() => setModelTrained(true)}
-                backendConnected={backendConnected}
-              />
-            )}
-            {activeTab === 'settings' && (
-              <SettingsTab
-                dataset={dataset}
-                onDatasetChange={updateDataset}
-                model={model}
-                modelTrained={modelTrained}
-                onModelTrained={() => setModelTrained(true)}
-                backendUrl={backendUrl}
-                onBackendUrlChange={handleBackendUrlChange}
-                backendConnected={backendConnected}
-              />
-            )}
+          <div className={`status-badge ${backendConnected ? 'online' : 'offline'}`}>
+            <div className={`status-dot ${backendConnected ? 'online' : 'offline'}`} />
+            {backendConnected ? 'API Connected' : 'Offline'}
           </div>
+        </header>
 
+        {/* ─── 3D Hand Hero Area ─── */}
+        <div className="hero-3d">
+          <Hand3DViewer />
         </div>
+
+        {/* ─── Floating Content Panel ─── */}
+        <div className={`content-panel ${!panelOpen ? 'collapsed' : ''}`}>
+          {activeTab === 'detection' && (
+            <DetectionTab model={model} modelTrained={modelTrained} backendConnected={backendConnected} />
+          )}
+          {activeTab === 'trainer' && (
+            <TrainerTab
+              dataset={dataset}
+              onDatasetChange={updateDataset}
+              model={model}
+              onModelTrained={() => setModelTrained(true)}
+              backendConnected={backendConnected}
+            />
+          )}
+          {activeTab === 'settings' && (
+            <SettingsTab
+              dataset={dataset}
+              onDatasetChange={updateDataset}
+              model={model}
+              modelTrained={modelTrained}
+              onModelTrained={() => setModelTrained(true)}
+              backendUrl={backendUrl}
+              onBackendUrlChange={handleBackendUrlChange}
+              backendConnected={backendConnected}
+            />
+          )}
+        </div>
+
+        {/* ─── Bottom Navbar ─── */}
+        <nav className="bottom-nav">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => { setActiveTab(t.id); setPanelOpen(true); }}
+              className={`nav-btn ${activeTab === t.id ? 'nav-btn-active' : ''}`}
+            >
+              <span>{t.icon}</span>
+              <span>{t.label}</span>
+            </button>
+          ))}
+          <button
+            className="panel-toggle"
+            onClick={() => setPanelOpen(!panelOpen)}
+            title={panelOpen ? 'Hide panel' : 'Show panel'}
+          >
+            {panelOpen ? '▼' : '▲'}
+          </button>
+        </nav>
 
       </div>
     </MediaPipeProvider>

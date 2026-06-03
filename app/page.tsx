@@ -4,10 +4,10 @@ import dynamic from 'next/dynamic';
 const Dashboard = dynamic(() => import('@/components/Dashboard'), {
   ssr: false,
   loading: () => (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#070b14' }}>
-      <div style={{ textAlign: 'center' }}>
-        <div className="spinner" style={{ margin: '0 auto 16px' }} />
-        <p style={{ color: '#64748b', fontSize: 14 }}>Memuat aplikasi...</p>
+    <div className="app-shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+        <div className="spinner" style={{ width: 32, height: 32, borderWidth: 3 }} />
+        <p style={{ color: 'var(--text-secondary)', fontSize: 14, fontWeight: 500, letterSpacing: 0.5 }}>Loading App...</p>
       </div>
     </div>
   ),

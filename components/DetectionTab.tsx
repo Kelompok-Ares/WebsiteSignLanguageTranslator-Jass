@@ -17,20 +17,31 @@ export default function DetectionTab({ model, modelTrained, backendConnected }: 
   const predRef = useRef(prediction);
   predRef.current = prediction;
 
+  const sequenceRef = useRef<number[][]>([]);
+
   useEffect(() => {
     if (!modelTrained || !backendConnected) { frameCallbackRef.current = null; return; }
 
     frameCallbackRef.current = async (lm) => {
       if (!lm) {
+        sequenceRef.current = []; // reset sequence on hand loss
         const smoothed = smoother.push(null);
         setPrediction(smoothed);
         return;
       }
       const features = normalizeLandmarks(lm);
       if (!features) return;
-      const raw = await model.predict(features);
-      const smoothed = smoother.push(raw);
-      setPrediction(smoothed);
+      
+      sequenceRef.current.push(features);
+      if (sequenceRef.current.length > 30) {
+        sequenceRef.current.shift(); // maintain sliding window of 30 frames
+      }
+      
+      if (sequenceRef.current.length === 30) {
+        const raw = await model.predict(sequenceRef.current);
+        const smoothed = smoother.push(raw);
+        setPrediction(smoothed);
+      }
     };
 
     return () => { frameCallbackRef.current = null; };
@@ -43,7 +54,7 @@ export default function DetectionTab({ model, modelTrained, backendConnected }: 
       if (h[h.length - 1] === prediction.label) return h;
       return [...h.slice(-19), prediction.label];
     });
-  }, [prediction?.label]);
+  }, [prediction]);
 
   const confPct = prediction ? Math.round(prediction.confidence * 100) : 0;
 
@@ -51,27 +62,27 @@ export default function DetectionTab({ model, modelTrained, backendConnected }: 
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }} className="fade-in">
       {/* Backend disconnected warning */}
       {!backendConnected && (
-        <div style={{ padding: '12px 14px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
-          <p style={{ fontSize: 13, color: '#f87171' }}>
+        <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--accent-red-light)', border: '1px solid rgba(239,68,68,0.2)' }}>
+          <p style={{ fontSize: 13, color: 'var(--accent-red)' }}>
             ⚠️ Backend tidak terkoneksi. Buka tab <b>Settings</b> untuk mengatur URL backend.
           </p>
         </div>
       )}
 
       {!modelTrained && backendConnected && (
-        <div style={{ padding: '12px 14px', borderRadius: 6, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
-          <p style={{ fontSize: 13, color: 'var(--accent-amber)' }}>
-            Model belum dilatih. Buka tab <b>Pelatih</b> untuk merekam sampel.
+        <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--accent-yellow-light)', border: '1px solid rgba(245,158,11,0.2)' }}>
+          <p style={{ fontSize: 13, color: '#d97706' }}>
+            Model belum dilatih. Buka tab <b>Train</b> untuk merekam sampel.
           </p>
         </div>
       )}
 
       {/* ── Prediction card ── */}
       <div className="prediction-bar">
-        <span className="section-title" style={{ display: 'block', marginBottom: 8 }}>Detected</span>
+        <span className="section-title" style={{ display: 'block', marginBottom: 8 }}>Detected Sign</span>
 
         <div className={`prediction-word ${!prediction ? 'empty' : ''}`} style={{ marginBottom: 16, minHeight: 40, transition: 'all 0.25s' }}>
-          {prediction ? prediction.label : (isHandDetected ? 'Analyzing...' : 'Put your hand on the camera')}
+          {prediction ? prediction.label : (isHandDetected ? 'Analyzing...' : 'Waiting for hand...')}
         </div>
 
         {/* Confidence bar */}
@@ -89,19 +100,19 @@ export default function DetectionTab({ model, modelTrained, backendConnected }: 
       <div style={{ display: 'flex', gap: 24, padding: '4px 8px' }}>
         <div>
           <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Hand Sign</div>
-          <div style={{ fontSize: 13, fontWeight: 500, color: isHandDetected ? 'var(--accent-green)' : 'var(--text-secondary)' }}>
-            {isHandDetected ? 'Terdeteksi' : 'Tidak Ada'}
+          <div style={{ fontSize: 13, fontWeight: 600, color: isHandDetected ? 'var(--accent-blue)' : 'var(--text-secondary)' }}>
+            {isHandDetected ? 'Detected' : 'None'}
           </div>
         </div>
         <div>
           <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Model Status</div>
-          <div style={{ fontSize: 13, fontWeight: 500, color: modelTrained ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
-            {modelTrained ? 'Aktif' : 'Tidak Aktif'}
+          <div style={{ fontSize: 13, fontWeight: 600, color: modelTrained ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
+            {modelTrained ? 'Active' : 'Inactive'}
           </div>
         </div>
         <div>
           <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Backend</div>
-          <div style={{ fontSize: 13, fontWeight: 500, color: backendConnected ? 'var(--accent-green)' : '#ef4444' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: backendConnected ? 'var(--accent-green)' : 'var(--accent-red)' }}>
             {backendConnected ? 'Connected' : 'Disconnected'}
           </div>
         </div>
@@ -110,18 +121,19 @@ export default function DetectionTab({ model, modelTrained, backendConnected }: 
       {/* ── Sentence builder ── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, padding: '0 8px' }}>
-          <span className="section-title">History</span>
-          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => setHistory([])}>
-            Hapus
+          <span className="section-title">Translation History</span>
+          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6 }} onClick={() => setHistory([])}>
+            Clear
           </button>
         </div>
         <div style={{
-          flex: 1, padding: 16, borderRadius: 8,
+          flex: 1, padding: 16, borderRadius: 14,
           background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-          fontSize: 16, fontWeight: 400, lineHeight: 1.6,
+          fontSize: 15, fontWeight: 500, lineHeight: 1.6,
           color: history.length ? 'var(--text-primary)' : 'var(--text-muted)',
+          boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
         }}>
-          {history.length ? history.join(' · ') : 'Kata yang terdeteksi akan muncul di sini...'}
+          {history.length ? history.join(' · ') : 'Detected words will appear here...'}
         </div>
       </div>
     </div>

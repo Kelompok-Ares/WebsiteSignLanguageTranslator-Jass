@@ -1,5 +1,5 @@
 export interface Sample {
-  features: number[]; // 63-element normalized landmark array
+  features: number[][] | number[]; // Support sequence of frames (LSTM) or single frame
   label: string;
 }
 
@@ -52,8 +52,7 @@ export function importDatasetJSON(json: string): DatasetState | null {
         (s: unknown) =>
           s &&
           typeof (s as Sample).label === 'string' &&
-          Array.isArray((s as Sample).features) &&
-          (s as Sample).features.length === 63
+          Array.isArray((s as Sample).features)
       );
       const labels: string[] = parsed.labels ?? Array.from(new Set(samples.map((s) => s.label))).sort();
       return { samples, labels };
