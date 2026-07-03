@@ -1,52 +1,74 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { useMediaPipe } from '@/contexts/MediaPipeContext';
-import { normalizeLandmarks } from '@/lib/normalization';
 import { PredictionSmoother } from '@/lib/utils';
 import type { SignModel } from '@/lib/model';
 import type { PredictionResult } from '@/lib/model';
+import { AlertTriangle, Check, Minus, X, List } from 'lucide-react';
 
 interface Props { model: SignModel; modelTrained: boolean; backendConnected: boolean; }
 
-const smoother = new PredictionSmoother(12, 0.55);
-
 export default function DetectionTab({ model, modelTrained, backendConnected }: Props) {
-  const { frameCallbackRef, isHandDetected } = useMediaPipe();
+  const { subscribeFrameCallback, isHandDetected } = useMediaPipe();
+  const smoother = useMemo(() => new PredictionSmoother(12, 0.55), []);
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const predRef = useRef(prediction);
   predRef.current = prediction;
 
-  const sequenceRef = useRef<number[][]>([]);
+  const frameBuffer = useRef<{ timestamp: number; landmarks: number[]; tracked: boolean }[]>([]);
+  const frameCount = useRef(0);
+  const isPredicting = useRef(false);
+  const WS_SEND_EVERY_N = 3; // Only send every Nth frame to reduce WebSocket + JSON.stringify load
 
   useEffect(() => {
-    if (!modelTrained || !backendConnected) { frameCallbackRef.current = null; return; }
+    if (!modelTrained || !backendConnected) {
+      setPrediction(null);
+      return;
+    }
 
-    frameCallbackRef.current = async (lm) => {
-      if (!lm) {
-        sequenceRef.current = []; // reset sequence on hand loss
+    // Connect WebSocket when component mounts
+    model.connectWS((result) => {
+      if (result) {
+        const isRejected = (result as any).rejected || result.label.includes('Idle');
+        const smoothed = smoother.push(isRejected ? null : result);
+        setPrediction(smoothed);
+      } else {
         const smoothed = smoother.push(null);
         setPrediction(smoothed);
-        return;
       }
-      const features = normalizeLandmarks(lm);
-      if (!features) return;
-      
-      sequenceRef.current.push(features);
-      if (sequenceRef.current.length > 30) {
-        sequenceRef.current.shift(); // maintain sliding window of 30 frames
+    });
+
+    const unsubscribe = subscribeFrameCallback((lm) => {
+      const now = Date.now();
+      frameCount.current++;
+
+      // Throttle: only send every Nth frame to reduce WebSocket + serialization load
+      if (frameCount.current % WS_SEND_EVERY_N !== 0) return;
+
+      let rawFeatures: number[] = [];
+      let tracked = false;
+
+      if (lm) {
+        rawFeatures = lm.flatMap(l => [l.x, l.y, l.z]);
+        tracked = true;
       }
-      
-      if (sequenceRef.current.length === 30) {
-        const raw = await model.predict(sequenceRef.current);
-        const smoothed = smoother.push(raw);
-        setPrediction(smoothed);
-      }
+
+      // Send the frame to the backend buffer via WebSocket
+      // The backend handles the buffer, cold start, and stride logic natively and efficiently.
+      model.sendFrame({
+        timestamp: now,
+        landmarks: rawFeatures,
+        tracked
+      });
+    });
+
+    return () => {
+      unsubscribe();
+      model.disconnectWS();
+      smoother.reset();
     };
-
-    return () => { frameCallbackRef.current = null; };
-  }, [modelTrained, backendConnected, model, frameCallbackRef]);
-
+  }, [modelTrained, backendConnected, model, subscribeFrameCallback, smoother]);
   // Add confirmed prediction to sentence history
   useEffect(() => {
     if (!prediction) return;
@@ -59,29 +81,31 @@ export default function DetectionTab({ model, modelTrained, backendConnected }: 
   const confPct = prediction ? Math.round(prediction.confidence * 100) : 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }} className="fade-in">
+    <div className="flex-col gap-lg fade-in">
+
       {/* Backend disconnected warning */}
       {!backendConnected && (
-        <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--accent-red-light)', border: '1px solid rgba(239,68,68,0.2)' }}>
-          <p style={{ fontSize: 13, color: 'var(--accent-red)' }}>
-            ⚠️ Backend tidak terkoneksi. Buka tab <b>Settings</b> untuk mengatur URL backend.
-          </p>
+        <div className="alert alert-error" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <AlertTriangle size={16} />
+          <span>Backend tidak terkoneksi. Buka tab <b>Settings</b> untuk mengatur URL backend.</span>
         </div>
       )}
 
       {!modelTrained && backendConnected && (
-        <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--accent-yellow-light)', border: '1px solid rgba(245,158,11,0.2)' }}>
-          <p style={{ fontSize: 13, color: '#d97706' }}>
-            Model belum dilatih. Buka tab <b>Train</b> untuk merekam sampel.
-          </p>
+        <div className="alert alert-warning" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <AlertTriangle size={16} />
+          <span>Model belum dilatih. Silahkan latih model dari Dashboard Google Colab terlebih dahulu.</span>
         </div>
       )}
 
       {/* ── Prediction card ── */}
       <div className="prediction-bar">
-        <span className="section-title" style={{ display: 'block', marginBottom: 8 }}>Detected Sign</span>
+        <span className="section-title" style={{ display: 'block', marginBottom: 10 }}>Detected Sign</span>
 
-        <div className={`prediction-word ${!prediction ? 'empty' : ''}`} style={{ marginBottom: 16, minHeight: 40, transition: 'all 0.25s' }}>
+        <div
+          className={`prediction-word ${!prediction ? 'empty' : ''}`}
+          style={{ marginBottom: 16, minHeight: 38 }}
+        >
           {prediction ? prediction.label : (isHandDetected ? 'Analyzing...' : 'Waiting for hand...')}
         </div>
 
@@ -90,50 +114,62 @@ export default function DetectionTab({ model, modelTrained, backendConnected }: 
           <div className="conf-track" style={{ flex: 1 }}>
             <div className="conf-fill" style={{ width: `${confPct}%` }} />
           </div>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', minWidth: 40, textAlign: 'right' }}>
+          <span style={{
+            fontSize: 13, fontWeight: 600,
+            color: confPct > 80 ? 'var(--accent-green)' : confPct > 50 ? 'var(--accent-blue)' : 'var(--text-secondary)',
+            minWidth: 40, textAlign: 'right',
+            transition: 'color 0.3s ease',
+          }}>
             {prediction ? `${confPct}%` : '—'}
           </span>
         </div>
       </div>
 
-      {/* ── Hand status ── */}
-      <div style={{ display: 'flex', gap: 24, padding: '4px 8px' }}>
-        <div>
-          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Hand Sign</div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: isHandDetected ? 'var(--accent-blue)' : 'var(--text-secondary)' }}>
-            {isHandDetected ? 'Detected' : 'None'}
-          </div>
+      {/* ── Status indicators ── */}
+      <div className="info-grid">
+        <div className="info-item">
+          <span className="info-label">Hand</span>
+          <span className="info-value" style={{ display: 'flex', alignItems: 'center', gap: '4px', color: isHandDetected ? 'var(--accent-blue)' : 'var(--text-muted)' }}>
+            {isHandDetected ? <><Check size={14} /> Detected</> : <><Minus size={14} /> None</>}
+          </span>
         </div>
-        <div>
-          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Model Status</div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: modelTrained ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
-            {modelTrained ? 'Active' : 'Inactive'}
-          </div>
+        <div className="info-item">
+          <span className="info-label">Model</span>
+          <span className="info-value" style={{ display: 'flex', alignItems: 'center', gap: '4px', color: modelTrained ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
+            {modelTrained ? <><Check size={14} /> Active</> : <><Minus size={14} /> Inactive</>}
+          </span>
         </div>
-        <div>
-          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Backend</div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: backendConnected ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-            {backendConnected ? 'Connected' : 'Disconnected'}
-          </div>
+        <div className="info-item">
+          <span className="info-label">Backend</span>
+          <span className="info-value" style={{ display: 'flex', alignItems: 'center', gap: '4px', color: backendConnected ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+            {backendConnected ? <><Check size={14} /> Online</> : <><X size={14} /> Offline</>}
+          </span>
         </div>
       </div>
 
-      {/* ── Sentence builder ── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, padding: '0 8px' }}>
+      {/* ── Translation History ── */}
+      <div className="flex-col">
+        <div className="section-header">
           <span className="section-title">Translation History</span>
-          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6 }} onClick={() => setHistory([])}>
+          <button
+            className="btn btn-ghost"
+            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6 }}
+            onClick={() => setHistory([])}
+          >
             Clear
           </button>
         </div>
-        <div style={{
-          flex: 1, padding: 16, borderRadius: 14,
-          background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-          fontSize: 15, fontWeight: 500, lineHeight: 1.6,
-          color: history.length ? 'var(--text-primary)' : 'var(--text-muted)',
-          boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
-        }}>
-          {history.length ? history.join(' · ') : 'Detected words will appear here...'}
+        <div className="history-container">
+          {history.length ? (
+            history.map((word, i) => (
+              <span key={`${i}-${word}`} className="history-word">{word}</span>
+            ))
+          ) : (
+            <div className="history-empty" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, opacity: 0.7, padding: '16px 0' }}>
+              <List size={24} color="var(--text-muted)" />
+              <span>Translation history is empty.</span>
+            </div>
+          )}
         </div>
       </div>
     </div>

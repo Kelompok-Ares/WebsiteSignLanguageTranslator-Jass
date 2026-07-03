@@ -22,13 +22,16 @@ export function normalizeLandmarks(landmarks: Landmark[]): number[] | null {
     z: lm.z - wrist.z,
   }));
 
-  // Step 2: Scale
-  let maxDist = 0;
-  for (const lm of translated) {
-    const dist = Math.sqrt(lm.x * lm.x + lm.y * lm.y + lm.z * lm.z);
-    if (dist > maxDist) maxDist = dist;
-  }
-  if (maxDist < 1e-6) return new Array(63).fill(0);
+  // Step 2: Scale — use bounding-box max dimension (matching backend's _normalize_single_hand)
+  const xs = translated.map(lm => lm.x);
+  const ys = translated.map(lm => lm.y);
+  const zs = translated.map(lm => lm.z);
+  const maxDist = Math.max(
+    Math.max(...xs) - Math.min(...xs),
+    Math.max(...ys) - Math.min(...ys),
+    Math.max(...zs) - Math.min(...zs),
+  );
+  if (maxDist < 1e-4) return new Array(63).fill(0);
 
   const scaled = translated.map((lm) => ({
     x: lm.x / maxDist,
@@ -47,10 +50,10 @@ export function normalizeLandmarks(landmarks: Landmark[]): number[] | null {
 export function parseExternalJSON(
   raw: unknown,
   labelKey = 'label'
-): Array<{ features: number[]; label: string }> | null {
+): Array<{ features: number[][]; label: string }> | null {
   try {
     const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    const results: Array<{ features: number[]; label: string }> = [];
+    const results: Array<{ features: number[][]; label: string }> = [];
 
     const processSample = (item: Record<string, unknown>) => {
       const label = String(item[labelKey] ?? item['class'] ?? item['gesture'] ?? '');
@@ -83,7 +86,15 @@ export function parseExternalJSON(
       }
 
       const features = normalizeLandmarks(landmarks);
-      if (features) results.push({ features, label });
+      if (features) {
+        // Pad to 126-dim (two-hand format) with mask values for right hand
+        const TWO_HAND_DIM = 126;
+        const padded = features.length < TWO_HAND_DIM
+          ? [...features, ...new Array(TWO_HAND_DIM - features.length).fill(-99.0)]
+          : features;
+        // Wrap as a single-frame sequence for LSTM compatibility
+        results.push({ features: [padded], label });
+      }
     };
 
     if (Array.isArray(data)) {

@@ -1,4 +1,6 @@
-import type { Sample } from './dataset';
+import { logger } from './logger';
+
+const modelLog = logger;
 
 export interface TrainLog {
   epoch: number;
@@ -21,7 +23,7 @@ export interface HealthStatus {
 }
 
 const STORAGE_KEY_URL = 'sl_backend_url';
-const DEFAULT_URL = '';
+const DEFAULT_URL = 'https://finite-maximum-unroll.ngrok-free.dev';
 
 function getStoredUrl(): string {
   try {
@@ -74,6 +76,7 @@ export class SignModel {
 
       if (!response.ok) {
         this._isConnected = false;
+        modelLog.warn('Health check failed', { status: response.status });
         return null;
       }
       const data: HealthStatus = await response.json();
@@ -85,9 +88,11 @@ export class SignModel {
         this._isBuilt = true;
       }
 
+      modelLog.debug('Health check OK', { trained: data.model_trained, labels: data.labels });
       return data;
-    } catch {
+    } catch (e) {
       this._isConnected = false;
+      modelLog.error('Health check error', e);
       return null;
     }
   }
@@ -97,81 +102,96 @@ export class SignModel {
     this._isBuilt = true;
   }
 
-  async train(
-    samples: Sample[],
-    epochs: number,
-    onEpochEnd: (log: TrainLog) => void,
-    onDone: () => void
-  ): Promise<void> {
-    if (!this._backendUrl) {
-      alert('Backend URL belum diatur! Buka tab Settings untuk mengaturnya.');
-      onDone();
-      return;
+  private ws: WebSocket | null = null;
+  private onPrediction: ((result: PredictionResult) => void) | null = null;
+  private wsReconnectAttempts = 0;
+  private wsMaxReconnectAttempts = 3;
+  private wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private _wsIntentionalClose = false;
+
+  connectWS(onPred: (res: PredictionResult) => void) {
+    if (!this._backendUrl) return;
+    
+    this._wsIntentionalClose = false;
+    this.onPrediction = onPred;
+    this._connectWSInternal();
+  }
+
+  private _connectWSInternal() {
+    // Convert http/https to ws/wss
+    const wsUrl = this._backendUrl.replace(/^http/, 'ws') + '/ws/predict';
+    
+    if (this.ws) {
+      this.ws.close();
     }
+    
+    this.ws = new WebSocket(wsUrl);
 
-    try {
-      const response = await fetch(`${this._backendUrl}/train`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ samples, epochs }),
-      });
+    this.ws.onopen = () => {
+      this.wsReconnectAttempts = 0;
+      modelLog.info('WebSocket connected', { url: wsUrl });
+    };
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errData.error || `HTTP ${response.status}`);
+    this.ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (this.onPrediction) this.onPrediction(data);
+      } catch (err) {
+        modelLog.error('Failed to parse WS message', err);
       }
+    };
 
-      const resData = await response.json();
-      this._labels = resData.labels;
-      this._isBuilt = true;
-      this._isConnected = true;
+    this.ws.onerror = (e) => {
+      modelLog.error('WebSocket error', e);
+    };
 
-      // Emit real training logs from backend
-      const logs: TrainLog[] = resData.logs || [];
-      for (const log of logs) {
-        onEpochEnd(log);
+    this.ws.onclose = () => {
+      if (this._wsIntentionalClose) return;
+
+      if (this.wsReconnectAttempts < this.wsMaxReconnectAttempts) {
+        const delay = Math.min(1000 * Math.pow(2, this.wsReconnectAttempts), 8000);
+        this.wsReconnectAttempts++;
+        modelLog.info(`WebSocket closed, reconnecting in ${delay}ms (attempt ${this.wsReconnectAttempts}/${this.wsMaxReconnectAttempts})`);
+        this.wsReconnectTimer = setTimeout(() => this._connectWSInternal(), delay);
+      } else {
+        modelLog.warn('WebSocket max reconnect attempts reached');
       }
+    };
+  }
 
-      onDone();
-    } catch (e) {
-      console.error('Error saat melatih model: ', e);
-      this._isConnected = false;
-      alert(
-        `Gagal melatih model di server backend.\n\n` +
-        `Error: ${e instanceof Error ? e.message : String(e)}\n\n` +
-        `Pastikan:\n` +
-        `1. Notebook Google Colab sedang berjalan\n` +
-        `2. URL backend benar (cek di Settings)`
-      );
-      onDone();
+  sendFrame(frame: { timestamp: number; landmarks: number[]; tracked: boolean }) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(frame));
     }
   }
 
-  async predict(features: number[][] | number[]): Promise<PredictionResult | null> {
-    if (!this._isBuilt || !this._backendUrl) return null;
+  disconnectWS() {
+    this._wsIntentionalClose = true;
+    if (this.wsReconnectTimer) {
+      clearTimeout(this.wsReconnectTimer);
+      this.wsReconnectTimer = null;
+    }
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.onPrediction = null;
+    this.wsReconnectAttempts = 0;
+  }
 
+  async predict(buffer: { timestamp: number; landmarks: number[]; tracked: boolean }[]): Promise<PredictionResult | null> {
+    // Kept for backward compatibility if needed
+    if (!this._backendUrl) return null;
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
       const response = await fetch(`${this._backendUrl}/predict`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ features }),
-        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ buffer })
       });
-      clearTimeout(timeout);
-
       if (!response.ok) return null;
-      const data = await response.json();
-
-      this._isConnected = true;
-      return { label: data.label, confidence: data.confidence };
-    } catch {
-      // Silently fail on predict — avoid flooding console during real-time detection
+      return await response.json();
+    } catch (e) {
+      modelLog.error('Predict error', e);
       return null;
     }
   }
@@ -181,5 +201,56 @@ export class SignModel {
   async saveDownload(): Promise<void> {}
   async saveToFiles(): Promise<any> { return null; }
   async loadFromFiles(..._args: any[]): Promise<void> {}
-  dispose(): void { this._isBuilt = false; }
+
+  async exportModel(): Promise<void> {
+    if (!this._backendUrl) {
+      throw new Error('Backend URL belum diatur!');
+    }
+    const response = await fetch(`${this._backendUrl}/model/export`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Gagal mengunduh model' }));
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'model.zip';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async importModel(file: File): Promise<boolean> {
+    if (!this._backendUrl) {
+      throw new Error('Backend URL belum diatur!');
+    }
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const response = await fetch(`${this._backendUrl}/model/import`, {
+      method: 'POST',
+      headers: {
+        'X-Train-Secret': process.env.NEXT_PUBLIC_TRAIN_SECRET || 'change-this-secret'
+      },
+      body: formData,
+    });
+    
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Gagal mengimpor model' }));
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    
+    const resData = await response.json();
+    if (resData.success) {
+      this._labels = resData.labels;
+      this._isBuilt = true;
+      return true;
+    }
+    return false;
+  }
+  dispose(): void { 
+    this._isBuilt = false; 
+  }
 }

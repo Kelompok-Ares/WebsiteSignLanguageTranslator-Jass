@@ -36,7 +36,7 @@ export class PredictionSmoother {
       if (count > bestCount) { bestCount = count; bestLabel = label; }
     }
 
-    if (bestCount / this.windowSize < this.threshold) return null;
+    if (bestCount / this.history.length < this.threshold) return null;
 
     return {
       label: bestLabel,
@@ -100,7 +100,8 @@ export function downloadJSON(data: unknown, filename: string): void {
   a.href = url;
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(url);
+  // Delay revocation to ensure download starts in all browsers
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export function readFileAsText(file: File): Promise<string> {
